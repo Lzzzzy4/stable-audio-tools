@@ -10,6 +10,8 @@ from stable_audio_tools.models import create_model_from_config
 from stable_audio_tools.models.utils import copy_state_dict, load_ckpt_state_dict, remove_weight_norm_from_model
 from stable_audio_tools.training import create_training_wrapper_from_config, create_demo_callback_from_config
 
+# python train.py --model-config stable_open_model_files/model_config.json --dataset-config stable_open_model_files/dataset_config.json --name rayan-training --save-dir checkpoints --pretrained-ckpt-path stable_open_model_files/model.safetensors --batch-size 16 --num-gpus 4 --strategy deepspeed
+
 class ExceptionCallback(pl.Callback):
     def on_exception(self, trainer, module, err):
         print(f'{type(err).__name__}: {err}')

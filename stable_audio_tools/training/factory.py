@@ -61,7 +61,7 @@ def create_training_wrapper_from_config(model_config, model):
             lr=training_config["learning_rate"],
             pre_encoded=training_config.get("pre_encoded", False),
         )
-    elif model_type in ['diffusion_cond', 'diffusion_cond_inpaint']:
+    elif model_type in ['diffusion_cond', 'diffusion_cond_inpaint']: # 111
        
         if "arc" in training_config:
             from .arc import ARCTrainingWrapper
@@ -113,7 +113,7 @@ def create_training_wrapper_from_config(model_config, model):
             )
 
         from .diffusion import DiffusionCondTrainingWrapper
-        return DiffusionCondTrainingWrapper(
+        return DiffusionCondTrainingWrapper( # 111
             model, 
             lr=training_config.get("learning_rate", None),
             mask_padding=training_config.get("mask_padding", False),

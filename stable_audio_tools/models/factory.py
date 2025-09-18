@@ -11,7 +11,7 @@ def create_model_from_config(model_config):
     elif model_type == 'diffusion_uncond':
         from .diffusion import create_diffusion_uncond_from_config
         return create_diffusion_uncond_from_config(model_config)
-    elif model_type == 'diffusion_cond' or model_type == 'diffusion_cond_inpaint':
+    elif model_type == 'diffusion_cond' or model_type == 'diffusion_cond_inpaint': # stable audio open 1.0
         from .diffusion import create_diffusion_cond_from_config
         return create_diffusion_cond_from_config(model_config)
     elif model_type == 'diffusion_autoencoder':

@@ -374,6 +374,67 @@ class T5Conditioner(Conditioner):
         embeddings = embeddings * attention_mask.unsqueeze(-1).float()
 
         return embeddings, attention_mask
+
+from transformers import Qwen2_5OmniProcessor
+from qwen_omni_utils import process_mm_info
+import math
+from diffusers.models.normalization import RMSNorm
+class WaveEncoderConditioner(nn.Module):
+
+    def __init__(
+            self,
+            output_dim: int,
+            enable_grad: bool = False,
+            enable_connecter_gard: bool = True,
+            project_out: bool = False
+    ):
+        super().__init__()
+        self.input_dim = 128
+        self.enable_grad = enable_grad
+        self.enable_connecter_gard = enable_connecter_gard
+        # super().__init__(input_dim, output_dim, project_out=project_out)
+
+        self.processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-3B")
+
+        self.connector_in_dim = self.input_dim
+        self.connector_out_dim = output_dim
+        norm = RMSNorm(self.connector_out_dim, eps=1e-5, elementwise_affine=True)
+        with torch.no_grad():
+            norm.weight.fill_(math.sqrt(5.5))
+        self.connector = nn.Sequential(
+            nn.Linear(self.connector_in_dim, self.connector_out_dim),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(self.connector_out_dim, self.connector_out_dim),
+            norm,
+        ).train(enable_connecter_gard).requires_grad_(enable_connecter_gard)
+
+    def forward(self, audio_paths: tp.List[str], device: tp.Union[torch.device, str]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
+        self.connector.to(device)
+        conversation = []
+        for audio in audio_paths:
+            conversation.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "audio", "audio": audio}
+                    ],
+                }
+            )
+        audios, images, videos = process_mm_info(conversation, use_audio_in_video=False)
+        inputs = self.processor(text=None, audio=audios, images=images, videos=videos, return_tensors="pt", padding=True, use_audio_in_video=False)
+
+        attention_mask = inputs["feature_attention_mask"]
+        embeddings = inputs["input_features"]
+
+        out_dype = next(self.connector.parameters()).dtype
+        embeddings = embeddings.to(device).to(out_dype)
+
+        embeddings = self.connector(embeddings)
+        embeddings = embeddings * attention_mask.unsqueeze(-1).float()
+
+        print(f"output embeddings shape: {embeddings.shape}, attention mask shape: {attention_mask.shape}")
+
+        return embeddings, attention_mask
     
 class PhonemeConditioner(Conditioner):
     """
@@ -709,6 +770,8 @@ def create_multi_conditioner_from_conditioning_config(config: tp.Dict[str, tp.An
 
         if conditioner_type == "t5":
             conditioners[id] = T5Conditioner(**conditioner_config)
+        elif conditioner_type == "wave_encoder":
+            conditioners[id] = WaveEncoderConditioner(**conditioner_config)
         elif conditioner_type == "clap_text":
             conditioners[id] = CLAPTextConditioner(**conditioner_config)
         elif conditioner_type == "clap_audio":
