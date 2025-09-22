@@ -19,7 +19,7 @@ from typing import Optional, Callable, List
 
 from .utils import Stereo, Mono, PhaseFlipper, PadCrop_Normalized_T, VolumeNorm
 
-AUDIO_KEYS = ("flac", "wav", "mp3", "m4a", "ogg", "opus")
+AUDIO_KEYS = ("flac", "wav", "mp3", "m4a", "ogg", "opus", "mp4")
 
 # fast_scandir implementation by Scott Hawley originally in https://github.com/zqevans/audio-diffusion/blob/main/dataset/dataset.py
 
@@ -94,7 +94,7 @@ def keyword_scandir(
 def get_audio_filenames(
     paths: list,  # directories in which to search
     keywords=None,
-    exts=['.wav', '.mp3', '.flac', '.ogg', '.aif', '.opus']
+    exts=['.wav', '.mp3', '.flac', '.ogg', '.aif', '.opus', '.mp4']
 ):
     "recursively get a list of audio filenames"
     filenames = []
@@ -142,6 +142,7 @@ class LocalDatasetConfig:
         self.path = path
         self.custom_metadata_fn = custom_metadata_fn
 
+import ffmpeg
 class SampleDataset(torch.utils.data.Dataset):
     def __init__(
         self, 
@@ -152,6 +153,7 @@ class SampleDataset(torch.utils.data.Dataset):
         random_crop=True,
         force_channels="stereo"
     ):
+        print(f"random_crop = {random_crop}")
         super().__init__()
         self.filenames = []
 
@@ -173,7 +175,7 @@ class SampleDataset(torch.utils.data.Dataset):
         self.sr = sample_rate
 
         self.custom_metadata_fns = {}
-
+        print("Start Scan files")
         for config in configs:
             self.root_paths.append(config.path)
             self.filenames.extend(get_audio_filenames(config.path, keywords))
@@ -181,11 +183,20 @@ class SampleDataset(torch.utils.data.Dataset):
                 self.custom_metadata_fns[config.path] = config.custom_metadata_fn
 
         print(f'Found {len(self.filenames)} files')
+        np.save("/data/code/AR/Reconstruction/dataset/filenames.npy", self.filenames)
 
     def load_file(self, filename):
         ext = filename.split(".")[-1]
-
-        audio, in_sr = torchaudio.load(filename, format=ext)
+        if ext == 'mp4':
+            out, _ = (
+                ffmpeg
+                .input(filename)
+                .output("pipe:", format="wav", acodec="pcm_s16le", ac=2, ar=self.sr)
+                .run(capture_stdout=True, capture_stderr=True)
+            )
+            audio, in_sr = torchaudio.load(io.BytesIO(out), format='wav')
+        else:
+            audio, in_sr = torchaudio.load(filename, format=ext)
 
         if in_sr != self.sr:
             resample_tf = T.Resample(in_sr, self.sr)

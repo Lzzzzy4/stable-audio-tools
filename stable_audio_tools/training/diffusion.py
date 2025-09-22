@@ -365,7 +365,7 @@ class DiffusionCondTrainingWrapper(pl.LightningModule):
             self.diffusion.pretransform.to(self.device)
 
             if not self.pre_encoded:
-                with torch.cuda.amp.autocast() and torch.set_grad_enabled(self.diffusion.pretransform.enable_grad):
+                with torch.amp.autocast('cuda') and torch.set_grad_enabled(self.diffusion.pretransform.enable_grad):
                     self.diffusion.pretransform.train(self.diffusion.pretransform.enable_grad)
 
                     diffusion_input = self.diffusion.pretransform.encode(diffusion_input)
@@ -698,7 +698,7 @@ class DiffusionCondDemoCallback(pl.Callback):
 
                 print(f"Generating demo for cfg scale {cfg_scale}")
 
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     model = module.diffusion_ema.ema_model if module.diffusion_ema is not None else module.diffusion.model
 
                     if module.diffusion_objective == "v":

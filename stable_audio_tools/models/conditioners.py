@@ -314,6 +314,7 @@ class T5Conditioner(Conditioner):
             enable_grad: bool = False,
             project_out: bool = False
     ):
+        raise NotImplementedError("T5Conditioner Init Wrong")
         assert t5_model_name in self.T5_MODELS, f"Unknown T5 model name: {t5_model_name}"
         super().__init__(self.T5_MODEL_DIMS[t5_model_name], output_dim, project_out=project_out)
         
@@ -379,6 +380,8 @@ from transformers import Qwen2_5OmniProcessor
 from qwen_omni_utils import process_mm_info
 import math
 from diffusers.models.normalization import RMSNorm
+import ffmpeg
+import io
 class WaveEncoderConditioner(nn.Module):
 
     def __init__(
@@ -408,31 +411,42 @@ class WaveEncoderConditioner(nn.Module):
             norm,
         ).train(enable_connecter_gard).requires_grad_(enable_connecter_gard)
 
-    def forward(self, audio_paths: tp.List[str], device: tp.Union[torch.device, str]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, prompts: tp.List[str], device: tp.Union[torch.device, str]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
         self.connector.to(device)
         conversation = []
-        for audio in audio_paths:
-            conversation.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "audio", "audio": audio}
-                    ],
-                }
-            )
-        audios, images, videos = process_mm_info(conversation, use_audio_in_video=False)
-        inputs = self.processor(text=None, audio=audios, images=images, videos=videos, return_tensors="pt", padding=True, use_audio_in_video=False)
+        for temp in prompts:
+            audio_path, audio_start, audio_end = temp
+            if audio_start != 0: print("*******************audio_start != 0")
+            if audio_path.split(".")[-1] == 'mp4':
+                conversation.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "video", "video": audio_path, "video_start": audio_start, "video_end": audio_end},
+                        ],
+                    }
+                )
+            else:
+                conversation.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "audio", "audio": audio_path, "audio_start": audio_start, "audio_end": audio_end},
+                        ],
+                    }
+                )
+        audios, images, videos = process_mm_info(conversation, use_audio_in_video=True)
+        inputs = self.processor(text="Hello", audio=audios, images=None, videos=None, return_tensors="pt", padding=True, use_audio_in_video=False)
 
-        attention_mask = inputs["feature_attention_mask"]
-        embeddings = inputs["input_features"]
+        attention_mask = inputs["feature_attention_mask"].to(device)
+        embeddings = inputs["input_features"].to(device)
 
         out_dype = next(self.connector.parameters()).dtype
-        embeddings = embeddings.to(device).to(out_dype)
+        embeddings = embeddings.to(out_dype)
+        embeddings = embeddings.permute(0, 2, 1)
 
         embeddings = self.connector(embeddings)
         embeddings = embeddings * attention_mask.unsqueeze(-1).float()
-
-        print(f"output embeddings shape: {embeddings.shape}, attention mask shape: {attention_mask.shape}")
 
         return embeddings, attention_mask
     
@@ -729,7 +743,7 @@ class MultiConditioner(nn.Module):
                         raise ValueError(f"Conditioner key {condition_key} not found in batch metadata")
 
                 #Unwrap the condition info if it's a single-element list or tuple, this is to support collation functions that wrap everything in a list
-                if isinstance(x[condition_key], list) or isinstance(x[condition_key], tuple) and len(x[condition_key]) == 1:
+                if (isinstance(x[condition_key], list) or isinstance(x[condition_key], tuple)) and len(x[condition_key]) == 1:
                     conditioner_input = x[condition_key][0]
                     
                 else:
