@@ -178,12 +178,13 @@ class SampleDataset(torch.utils.data.Dataset):
         print("Start Scan files")
         for config in configs:
             self.root_paths.append(config.path)
-            self.filenames.extend(get_audio_filenames(config.path, keywords))
+            # self.filenames.extend(get_audio_filenames(config.path, keywords))
+            self.filenames = np.load("/blob/lzy/AR/Reconstruction/dataset/filenames.npy")
             if config.custom_metadata_fn is not None:
                 self.custom_metadata_fns[config.path] = config.custom_metadata_fn
 
         print(f'Found {len(self.filenames)} files')
-        np.save("/data/code/AR/Reconstruction/dataset/filenames.npy", self.filenames)
+        # np.save("/data/code/AR/Reconstruction/dataset/filenames.npy", self.filenames)
 
     def load_file(self, filename):
         ext = filename.split(".")[-1]

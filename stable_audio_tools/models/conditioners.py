@@ -377,7 +377,8 @@ class T5Conditioner(Conditioner):
         return embeddings, attention_mask
 
 from transformers import Qwen2_5OmniProcessor
-from qwen_omni_utils import process_mm_info
+# from qwen_omni_utils import process_mm_info
+from .process_mm_info import process_mm_info
 import math
 from diffusers.models.normalization import RMSNorm
 import ffmpeg
@@ -436,17 +437,20 @@ class WaveEncoderConditioner(nn.Module):
                     }
                 )
         audios, images, videos = process_mm_info(conversation, use_audio_in_video=True)
+        # /home/yifanyang/miniconda3/envs/sao/lib/python3.10/site-packages/qwen_omni_utils/v2_5/audio_process.py
         inputs = self.processor(text="Hello", audio=audios, images=None, videos=None, return_tensors="pt", padding=True, use_audio_in_video=False)
 
         attention_mask = inputs["feature_attention_mask"].to(device)
         embeddings = inputs["input_features"].to(device)
 
-        out_dype = next(self.connector.parameters()).dtype
-        embeddings = embeddings.to(out_dype)
+        
         embeddings = embeddings.permute(0, 2, 1)
 
         embeddings = self.connector(embeddings)
         embeddings = embeddings * attention_mask.unsqueeze(-1).float()
+
+        out_dype = next(self.connector.parameters()).dtype
+        embeddings = embeddings.to(out_dype)
 
         return embeddings, attention_mask
     
