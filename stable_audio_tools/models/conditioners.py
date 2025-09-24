@@ -383,6 +383,8 @@ import math
 from diffusers.models.normalization import RMSNorm
 import ffmpeg
 import io
+import random
+import time
 class WaveEncoderConditioner(nn.Module):
 
     def __init__(
@@ -397,7 +399,8 @@ class WaveEncoderConditioner(nn.Module):
         self.enable_grad = enable_grad
         self.enable_connecter_gard = enable_connecter_gard
         # super().__init__(input_dim, output_dim, project_out=project_out)
-
+        # random sleep for 0～5s
+        time.sleep(random.randint(0,5))
         self.processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-3B")
 
         self.connector_in_dim = self.input_dim
