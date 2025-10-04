@@ -348,6 +348,7 @@ class DiffusionCondTrainingWrapper(pl.LightningModule):
 
         #with torch.amp.autocast(device_type="cuda"):
         conditioning = self.diffusion.conditioner(metadata, self.device)
+        vq_loss = conditioning.pop("vq_loss", None)
 
         # If mask_padding is on, randomly drop the padding masks to allow for learning silence padding
         use_padding_mask = self.mask_padding and random.random() > self.mask_padding_dropout
@@ -475,8 +476,11 @@ class DiffusionCondTrainingWrapper(pl.LightningModule):
         log_dict = {
             'train/loss': loss.detach(),
             'train/std_data': diffusion_input.std(),
+            'train/vq_loss': vq_loss.detach() if vq_loss is not None else 0.0,
             'train/lr': self.trainer.optimizers[0].param_groups[0]['lr']
         }
+        
+        loss += vq_loss if vq_loss is not None else 0.0
 
         for loss_name, loss_value in losses.items():
             log_dict[f"train/{loss_name}"] = loss_value.detach()
@@ -484,6 +488,7 @@ class DiffusionCondTrainingWrapper(pl.LightningModule):
         self.log_dict(log_dict, prog_bar=True, on_step=True)
         p.tick("log")
         #print(f"Profiler: {p}")
+        # !!!!loss
         return loss
 
     def on_before_zero_grad(self, *args, **kwargs):

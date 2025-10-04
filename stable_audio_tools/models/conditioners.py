@@ -385,6 +385,9 @@ import ffmpeg
 import io
 import random
 import time
+import sys
+sys.path.append("/data/code/AR/VQ_tok")
+from ibq import VQConvProjector
 class WaveEncoderConditioner(nn.Module):
 
     def __init__(
@@ -392,6 +395,7 @@ class WaveEncoderConditioner(nn.Module):
             output_dim: int,
             enable_grad: bool = False,
             enable_connecter_gard: bool = True,
+            vq_quant: bool = False,
             project_out: bool = False
     ):
         super().__init__()
@@ -414,8 +418,19 @@ class WaveEncoderConditioner(nn.Module):
             nn.Linear(self.connector_out_dim, self.connector_out_dim),
             norm,
         ).train(enable_connecter_gard).requires_grad_(enable_connecter_gard)
+        
+        self.vq_quant = vq_quant
+        if vq_quant:
+            self.ibq_projection = VQConvProjector(
+                z_channels=512,    # 2048
+                codebook_size=16384,  # codebook size: 16384
+                codebook_dim=512,  # 2048
+                use_transformer=False,
+                # config=copy.deepcopy(config),  # use the same config as the model
+                recon=False,     # whether to use the recon loss
+            )
 
-    def forward(self, prompts: tp.List[str], device: tp.Union[torch.device, str]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, prompts: tp.List[str], device: tp.Union[torch.device, str]) -> tp.Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         self.connector.to(device)
         conversation = []
         for temp in prompts:
@@ -454,8 +469,24 @@ class WaveEncoderConditioner(nn.Module):
 
         out_dype = next(self.connector.parameters()).dtype
         embeddings = embeddings.to(out_dype)
+        
+        if self.vq_quant:
+            valid_lengths = attention_mask.sum(dim=1).long()  # [batch]
+            
+            cu_seqlens = torch.cat([
+                torch.zeros(1, device=device, dtype=torch.long), #[0]
+                valid_lengths.cumsum(dim=0) # [batch]
+            ], dim=0)  # [batch + 1]
 
-        return embeddings, attention_mask
+            quant_code, code_idx, vq_loss = self.vq_layer(
+                embeddings,          # [batch, 30000, hidden_dim]
+                cu_seqlens=cu_seqlens,
+                rotary_pos_emb=None  
+            )
+            print(f"quant_code: {quant_code.shape}, code_idx: {code_idx.shape}, vq_loss: {vq_loss}")
+            return quant_code, attention_mask, vq_loss
+
+        return embeddings, attention_mask, None
     
 class PhonemeConditioner(Conditioner):
     """
@@ -755,6 +786,12 @@ class MultiConditioner(nn.Module):
                     
                 else:
                     conditioner_input = x[condition_key]
+                    if condition_key == "prompt":
+                        if len(x[condition_key]) == 3:
+                            conditioner_input = [x[condition_key][0:2]]
+                            output["vq_loss"] = x[condition_key][2]
+                        else:
+                            pass
 
                 conditioner_inputs.append(conditioner_input)
 
