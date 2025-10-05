@@ -421,16 +421,17 @@ class WaveEncoderConditioner(nn.Module):
         
         self.vq_quant = vq_quant
         if vq_quant:
+            print("*********WaveEncoderConditioner using VQ quantization")
             self.ibq_projection = VQConvProjector(
-                z_channels=512,    # 2048
-                codebook_size=16384,  # codebook size: 16384
-                codebook_dim=512,  # 2048
+                z_channels=768,    # 2048
+                codebook_size=8192,  # codebook size: 16384
+                codebook_dim=768,  # 2048
                 use_transformer=False,
                 # config=copy.deepcopy(config),  # use the same config as the model
                 recon=False,     # whether to use the recon loss
             )
 
-    def forward(self, prompts: tp.List[str], device: tp.Union[torch.device, str]) -> tp.Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, prompts: tp.List[str], device: tp.Union[torch.device, str]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
         self.connector.to(device)
         conversation = []
         for temp in prompts:
@@ -477,16 +478,22 @@ class WaveEncoderConditioner(nn.Module):
                 torch.zeros(1, device=device, dtype=torch.long), #[0]
                 valid_lengths.cumsum(dim=0) # [batch]
             ], dim=0)  # [batch + 1]
-
-            quant_code, code_idx, vq_loss = self.vq_layer(
-                embeddings,          # [batch, 30000, hidden_dim]
+            # print(f"embeddings: {embeddings.shape}, cu_seqlens: {cu_seqlens.shape}, attention_mask: {attention_mask.shape}")
+            # [batch, 30000, hidden_dim] to [batch*30000, hidden_dim]
+            embeddings_quant = embeddings.reshape(-1, embeddings.shape[-1])
+            quant_code, code_idx, vq_loss = self.ibq_projection(
+                # embeddings,
+                embeddings_quant,
                 cu_seqlens=cu_seqlens,
-                rotary_pos_emb=None  
+                position_embeddings=None
             )
-            print(f"quant_code: {quant_code.shape}, code_idx: {code_idx.shape}, vq_loss: {vq_loss}")
-            return quant_code, attention_mask, vq_loss
+            # print(f"quant_code: {quant_code.shape}, code_idx: {code_idx.shape}, vq_loss: {vq_loss}")
+            # quant code back to [batch, 30000, hidden_dim]
+            quant_code = quant_code.reshape(embeddings.shape[0], embeddings.shape[1], -1)
+            # return quant_code, attention_mask, vq_loss
+            return quant_code, attention_mask
 
-        return embeddings, attention_mask, None
+        return embeddings, attention_mask
     
 class PhonemeConditioner(Conditioner):
     """
@@ -786,12 +793,6 @@ class MultiConditioner(nn.Module):
                     
                 else:
                     conditioner_input = x[condition_key]
-                    if condition_key == "prompt":
-                        if len(x[condition_key]) == 3:
-                            conditioner_input = [x[condition_key][0:2]]
-                            output["vq_loss"] = x[condition_key][2]
-                        else:
-                            pass
 
                 conditioner_inputs.append(conditioner_input)
 
@@ -799,6 +800,9 @@ class MultiConditioner(nn.Module):
                 output[key] = [torch.stack(conditioner_inputs, dim=0).to(device), None]
             else:
                 output[key] = conditioner(conditioner_inputs, device)
+                if key == "prompt":
+                    output["vq_loss"] = output[key][2] if len(output[key]) > 2 else None
+                    output["prompt"] = output["prompt"][:2]
 
         return output
     
