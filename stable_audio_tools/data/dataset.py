@@ -202,6 +202,14 @@ class SampleDataset(torch.utils.data.Dataset):
         if in_sr != self.sr:
             resample_tf = T.Resample(in_sr, self.sr)
             audio = resample_tf(audio)
+        
+        num_samples = audio.shape[1]
+        crop_len = int(self.sr * 15)  # 15秒对应的采样点数
+    
+        if num_samples > crop_len:
+            start = random.randint(0, num_samples - crop_len)
+            end = start + crop_len
+            audio = audio[:, start:end]
 
         return audio
 
