@@ -179,12 +179,13 @@ class SampleDataset(torch.utils.data.Dataset):
         for config in configs:
             self.root_paths.append(config.path)
             # self.filenames.extend(get_audio_filenames(config.path, keywords))
-            self.filenames = np.load("/blob/lzy/AR/Reconstruction/dataset/filenames_1.npy")
+            self.filenames = np.load("/blob/lzy/AR/Reconstruction/dataset/filenames_2.npy")
+            np.random.shuffle(self.filenames)
             if config.custom_metadata_fn is not None:
                 self.custom_metadata_fns[config.path] = config.custom_metadata_fn
 
         print(f'Found {len(self.filenames)} files')
-        # np.save("/blob/lzy/AR/Reconstruction/dataset/filenames_1.npy", self.filenames)
+        # np.save("/data/code/filenames_1.npy", self.filenames)
 
     def load_file(self, filename):
         ext = filename.split(".")[-1]
