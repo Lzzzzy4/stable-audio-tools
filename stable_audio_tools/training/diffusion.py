@@ -669,6 +669,8 @@ class DiffusionCondDemoCallback(pl.Callback):
 
         noise = torch.randn([self.num_demos, module.diffusion.io_channels, demo_samples]).to(module.device)
         print(demo_cond)
+        for cond in demo_cond:
+            cond["demo"] = True
 
         try:
             print("Getting conditioning")

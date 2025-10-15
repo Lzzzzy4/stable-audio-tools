@@ -655,14 +655,16 @@ class MultiConditioner(nn.Module):
 
     def forward(self, batch_metadata: tp.List[tp.Dict[str, tp.Any]], device: tp.Union[torch.device, str]) -> tp.Dict[str, tp.Any]:
         output = {}
-
+        demo = batch_metadata
         for key, conditioner in self.conditioners.items():
             condition_key = key
 
             conditioner_inputs = []
 
             for x in batch_metadata:
-
+                demo = False
+                if "demo" in x:
+                    demo = True
                 if condition_key not in x:
                     if condition_key in self.default_keys:
                         condition_key = self.default_keys[condition_key]
@@ -681,10 +683,10 @@ class MultiConditioner(nn.Module):
             if key in self.pre_encoded_keys:
                 output[key] = [torch.stack(conditioner_inputs, dim=0).to(device), None]
             else:
-                output[key] = conditioner(conditioner_inputs, device)
                 if key == "prompt":
-                    output["vq_loss"] = output[key][2] if len(output[key]) > 2 else None
-                    output["prompt"] = output["prompt"][:2]
+                    output[key] = conditioner(conditioner_inputs, device, demo=demo)
+                else:
+                    output[key] = conditioner(conditioner_inputs, device)
 
         return output
     

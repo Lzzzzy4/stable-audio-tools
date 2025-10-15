@@ -1,5 +1,5 @@
 from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
-from process_mm_info import process_mm_info
+from .process_mm_info_ import process_mm_info
 import math
 from diffusers.models.normalization import RMSNorm
 import ffmpeg
@@ -28,8 +28,9 @@ class WaveEncoderConditioner(nn.Module):
         time.sleep(random.randint(0,5))
         self.processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-3B")
 
-        model_temp = Qwen2_5OmniForConditionalGeneration.from_pretrained("Qwen/Qwen2.5-Omni-3B", torch_dtype="auto", device_map="auto")
+        model_temp = Qwen2_5OmniForConditionalGeneration.from_pretrained("Qwen/Qwen2.5-Omni-3B", torch_dtype="auto", device_map="cpu")
         self.audio_tower = model_temp.thinker.audio_tower
+        self.audio_tower.train(False).requires_grad_(False)
         del model_temp
         gc.collect()
         torch.cuda.empty_cache()
@@ -50,15 +51,15 @@ class WaveEncoderConditioner(nn.Module):
         if vq_quant:
             print("*********WaveEncoderConditioner using VQ quantization")
             self.ibq_projection = VQConvProjector(
-                z_channels=self.connector_out_dim,    # 2048
-                codebook_size=8192,  # codebook size: 16384
-                codebook_dim=self.connector_out_dim,  # 2048
+                z_channels=self.connector_out_dim,    # 768
+                codebook_size=16384,  # codebook size: 16384
+                codebook_dim=self.connector_out_dim,  # 768
                 use_transformer=False,
                 # config=copy.deepcopy(config),  # use the same config as the model
                 recon=False,     # whether to use the recon loss
             )
 
-    def forward(self, prompts: tp.List[str], device: tp.Union[torch.device, str]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, prompts: tp.List[str], device: tp.Union[torch.device, str], demo: bool=False) -> tp.Tuple[torch.Tensor, torch.Tensor]:
         self.audio_tower.to(device)
         self.connector.to(device)
         self.ibq_projection.to(device)
@@ -113,19 +114,29 @@ class WaveEncoderConditioner(nn.Module):
 
         if self.vq_quant:
             valid_lengths = attention_mask.sum(dim=1).long()  # [batch]
-            
             cu_seqlens = torch.cat([
                 torch.zeros(1, device=device, dtype=torch.long), #[0]
                 valid_lengths.cumsum(dim=0) # [batch]
             ], dim=0)  # [batch + 1]
-            embeddings_quant = embeddings.reshape(-1, embeddings.shape[-1])
+            # embeddings_quant should be [sum(valid_lengths), dim]
+            embeddings_quant = torch.zeros((cu_seqlens[-1], embeddings.shape[2]), device=device)
+            for i in range(embeddings.shape[0]):
+                embeddings_quant[cu_seqlens[i]:cu_seqlens[i+1], :] = embeddings[i, :valid_lengths[i], :]
+            # print(f"embeddings_quant {embeddings_quant.shape, embeddings_quant[0][:10]}, cu_seqlens {cu_seqlens}, valid_lengths {valid_lengths}")
             quant_code, code_idx, vq_loss = self.ibq_projection(
                 # embeddings,
                 embeddings_quant,
                 cu_seqlens=cu_seqlens,
-                position_embeddings=None
+                position_embeddings=None,
+                demo=demo,
             )
-            quant_code = quant_code.reshape(embeddings.shape[0], embeddings.shape[1], -1)
+            # back to [batch, seqlen, dim]
+            # print(f"quant_code before reshape {quant_code.shape, quant_code[0][:10]}")
+            quant_code_batch = torch.zeros_like(embeddings)
+            for i in range(embeddings.shape[0]):
+                quant_code_batch[i, :valid_lengths[i], :] = quant_code[cu_seqlens[i]:cu_seqlens[i+1], :]
+            quant_code = quant_code_batch
+            # print(f"quant_code {quant_code.shape, quant_code[0][0][:10]}, code_idx {code_idx.shape}, vq_loss {vq_loss}")
             out_dtype = next(self.connector.parameters()).dtype
             quant_code = quant_code.to(out_dtype)
             return quant_code, attention_mask
