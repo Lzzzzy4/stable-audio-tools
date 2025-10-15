@@ -1,5 +1,5 @@
 from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
-from .process_mm_info import process_mm_info
+from process_mm_info import process_mm_info
 import math
 from diffusers.models.normalization import RMSNorm
 import ffmpeg
@@ -7,27 +7,32 @@ import io
 import random
 import time
 import sys
+import gc
 sys.path.append("/data/code/AR/VQ_tok")
 from ibq import VQConvProjector
+import torch
+import torch.nn as nn
+import typing as tp
+from typing import Any, Callable, Optional, Union
 class WaveEncoderConditioner(nn.Module):
-
     def __init__(
             self,
             output_dim: int,
-            enable_grad: bool = False,
             enable_connecter_gard: bool = True,
-            vq_quant: bool = False,
-            project_out: bool = False
+            vq_quant: bool = True,
     ):
         super().__init__()
-        self.input_dim = 128
-        self.enable_grad = enable_grad
+        self.input_dim = 1280
         self.enable_connecter_gard = enable_connecter_gard
-        # super().__init__(input_dim, output_dim, project_out=project_out)
         # random sleep for 0～5s
         time.sleep(random.randint(0,5))
         self.processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-3B")
-        self.model = Qwen2_5OmniForConditionalGeneration.from_pretrained("Qwen/Qwen2.5-Omni-3B", torch_dtype="auto", device_map="auto")
+
+        model_temp = Qwen2_5OmniForConditionalGeneration.from_pretrained("Qwen/Qwen2.5-Omni-3B", torch_dtype="auto", device_map="auto")
+        self.audio_tower = model_temp.thinker.audio_tower
+        del model_temp
+        gc.collect()
+        torch.cuda.empty_cache()
 
         self.connector_in_dim = self.input_dim
         self.connector_out_dim = output_dim
@@ -45,20 +50,26 @@ class WaveEncoderConditioner(nn.Module):
         if vq_quant:
             print("*********WaveEncoderConditioner using VQ quantization")
             self.ibq_projection = VQConvProjector(
-                z_channels=768,    # 2048
+                z_channels=self.connector_out_dim,    # 2048
                 codebook_size=8192,  # codebook size: 16384
-                codebook_dim=768,  # 2048
+                codebook_dim=self.connector_out_dim,  # 2048
                 use_transformer=False,
                 # config=copy.deepcopy(config),  # use the same config as the model
                 recon=False,     # whether to use the recon loss
             )
 
     def forward(self, prompts: tp.List[str], device: tp.Union[torch.device, str]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
-        self.model.to(device)
+        self.audio_tower.to(device)
         self.connector.to(device)
+        self.ibq_projection.to(device)
         conversation = []
         for temp in prompts:
-            audio_path, audio_start, audio_end = temp
+            if type(temp) is str:
+                audio_path = temp
+                audio_start = 0
+                audio_end = None
+            else:
+                audio_path, audio_start, audio_end = temp
             if audio_start != 0: print("*******************audio_start != 0")
             if audio_path.split(".")[-1] == 'mp4':
                 conversation.append(
@@ -82,18 +93,24 @@ class WaveEncoderConditioner(nn.Module):
         # /home/yifanyang/miniconda3/envs/sao/lib/python3.10/site-packages/qwen_omni_utils/v2_5/audio_process.py
         inputs = self.processor(text="Hello", audio=audios, images=None, videos=None, return_tensors="pt", padding=True, use_audio_in_video=False)
 
-        attention_mask = inputs["feature_attention_mask"].to(device)
-        embeddings = inputs["input_features"].to(device)
-
+        audio_features = self.get_audio_features(
+            input_features=inputs["input_features"].to(device),
+            feature_attention_mask=inputs["feature_attention_mask"].to(device),
+            audio_feature_lengths=None,
+        )
+        # N \times [seq, 1280] -> embeddings [batch, 2000, 1280]  attention_mask [batch, 2000]
+        embeddings = torch.zeros((len(prompts), 2000, self.input_dim), device=device)
+        attention_mask = torch.zeros((len(prompts), 2000), device=device, dtype=torch.long)
+        for i,audio_feature in enumerate(audio_features):
+            embeddings[i, :audio_feature.shape[0], :] = audio_feature
+            attention_mask[i, :audio_feature.shape[0]] = 1
+        # print(f"embeddings {embeddings[0][0]}")
         
-        embeddings = embeddings.permute(0, 2, 1)
+        # embeddings = embeddings.permute(0, 2, 1)
 
         embeddings = self.connector(embeddings)
         embeddings = embeddings * attention_mask.unsqueeze(-1).float()
 
-        out_dype = next(self.connector.parameters()).dtype
-        embeddings = embeddings.to(out_dype)
-        
         if self.vq_quant:
             valid_lengths = attention_mask.sum(dim=1).long()  # [batch]
             
@@ -101,8 +118,6 @@ class WaveEncoderConditioner(nn.Module):
                 torch.zeros(1, device=device, dtype=torch.long), #[0]
                 valid_lengths.cumsum(dim=0) # [batch]
             ], dim=0)  # [batch + 1]
-            # print(f"embeddings: {embeddings.shape}, cu_seqlens: {cu_seqlens.shape}, attention_mask: {attention_mask.shape}")
-            # [batch, 30000, hidden_dim] to [batch*30000, hidden_dim]
             embeddings_quant = embeddings.reshape(-1, embeddings.shape[-1])
             quant_code, code_idx, vq_loss = self.ibq_projection(
                 # embeddings,
@@ -110,10 +125,52 @@ class WaveEncoderConditioner(nn.Module):
                 cu_seqlens=cu_seqlens,
                 position_embeddings=None
             )
-            # print(f"quant_code: {quant_code.shape}, code_idx: {code_idx.shape}, vq_loss: {vq_loss}")
-            # quant code back to [batch, 30000, hidden_dim]
             quant_code = quant_code.reshape(embeddings.shape[0], embeddings.shape[1], -1)
-            # return quant_code, attention_mask, vq_loss
+            out_dtype = next(self.connector.parameters()).dtype
+            quant_code = quant_code.to(out_dtype)
             return quant_code, attention_mask
 
+        out_dtype = next(self.connector.parameters()).dtype
+        embeddings = embeddings.to(out_dtype)
+
         return embeddings, attention_mask
+
+    def get_audio_features(
+        self,
+        input_features: torch.FloatTensor,
+        feature_attention_mask: Optional[torch.LongTensor] = None,
+        audio_feature_lengths: Optional[torch.LongTensor] = None,
+    ):
+        """
+        Encodes audios into continuous embeddings that can be forwarded to the language model.
+
+        Args:
+            input_features (`torch.FloatTensor`):
+                The tensors corresponding to the input audios.
+            feature_attention_mask (`torch.LongTensor`, *optional*):
+                Mask to avoid performing attention on padding feature indices. Mask values selected in `[0, 1]`:
+            audio_feature_lengths (`torch.LongTensor` of shape `(num_audios)`, *optional*):
+                The length of feature shape of each audio in LLM.
+        """
+        if feature_attention_mask is not None:
+            audio_feature_lengths = torch.sum(feature_attention_mask, dim=1)
+            input_features = input_features.permute(0, 2, 1)[feature_attention_mask.bool()].permute(1, 0)
+        else:
+            audio_feature_lengths = None
+
+        audio_feat_lengths, audio_output_lengths = self.audio_tower._get_feat_extract_output_lengths(
+            audio_feature_lengths if audio_feature_lengths is not None else feature_attention_mask.sum(-1)
+        )
+        feature_lens = audio_feature_lengths if audio_feature_lengths is not None else feature_attention_mask.sum(-1)
+        audio_outputs = self.audio_tower(
+            input_features,
+            feature_lens=feature_lens,
+            aftercnn_lens=audio_feat_lengths,
+        )
+
+        audio_features = audio_outputs.last_hidden_state
+
+        # if audio_features.shape[0] != sum(audio_output_lengths.tolist()):
+        #     raise ValueError("length of audio_features should match audio_output_lengths")
+
+        return audio_features
