@@ -1,4 +1,4 @@
-from audiconditioner import AudioEncoderConditioner
+from audioconditioner import AudioEncoderConditioner
 
 model = AudioEncoderConditioner(output_dim=768)
 path = "/blob/vggsound/vggsound_03/scratch/shared/beegfs/hchen/train_data/VGGSound_final/video/A-ZzvGPcdOI_000011.mp4"

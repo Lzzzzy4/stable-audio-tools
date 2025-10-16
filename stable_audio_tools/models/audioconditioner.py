@@ -22,6 +22,7 @@ class AudioEncoderConditioner(nn.Module):
             enable_connecter_gard: bool = True,
             vq_quant: bool = True,
     ):
+        # 下游 128*768? 但是可以处理长序列
         super().__init__()
         self.input_dim = 1280
         self.enable_connecter_gard = enable_connecter_gard
@@ -115,6 +116,7 @@ class AudioEncoderConditioner(nn.Module):
 
         if self.vq_quant:
             valid_lengths = attention_mask.sum(dim=1).long()  # [batch]
+            print(f"valid_lengths {valid_lengths}")
             cu_seqlens = torch.cat([
                 torch.zeros(1, device=device, dtype=torch.long), #[0]
                 valid_lengths.cumsum(dim=0) # [batch]
