@@ -376,7 +376,7 @@ class T5Conditioner(Conditioner):
 
         return embeddings, attention_mask
 
-from .waveconditioner import WaveEncoderConditioner    
+from .audioconditioner import AudioEncoderConditioner    
 class PhonemeConditioner(Conditioner):
     """
     A conditioner that turns text into phonemes and embeds them using a lookup table

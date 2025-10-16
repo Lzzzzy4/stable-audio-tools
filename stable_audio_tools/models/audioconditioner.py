@@ -14,7 +14,8 @@ import torch
 import torch.nn as nn
 import typing as tp
 from typing import Any, Callable, Optional, Union
-class WaveEncoderConditioner(nn.Module):
+
+class AudioEncoderConditioner(nn.Module):
     def __init__(
             self,
             output_dim: int,
