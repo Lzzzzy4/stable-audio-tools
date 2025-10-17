@@ -105,14 +105,16 @@ def process_audio_info(conversations: list[dict] | list[list[dict]], use_audio_i
                         raise ValueError("Unknown video {}".format(ele))
                 else:
                     continue
-                audios.append(
-                    librosa.load(
-                        data,
-                        sr=SAMPLE_RATE,
-                        offset=audio_start,
-                        duration=(audio_end - audio_start) if audio_end is not None else None,
-                    )[0]
-                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    audios.append(
+                        librosa.load(
+                            data,
+                            sr=SAMPLE_RATE,
+                            offset=audio_start,
+                            duration=(audio_end - audio_start) if audio_end is not None else None,
+                        )[0]
+                    )
     if len(audios) == 0:
         audios = None
     return audios
